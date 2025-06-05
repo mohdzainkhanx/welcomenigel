@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WelcomeNigel's Prototype</title>
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600&family=Bebas+Neue&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Montserrat', sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background: linear-gradient(135deg, #1a1a1a, #2c3e50);
+            color: #ffffff;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+        }
+        h1 {
+            font-family: 'Bebas Neue', sans-serif;
+            font-size: 3.5em;
+            color: #00ff88;
+            text-shadow: 0 0 10px rgba(0, 255, 136, 0.5);
+            margin-bottom: 20px;
+        }
+        #controls {
+            background: rgba(0, 0, 0, 0.7);
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 4px 15px rgba(0, 255, 136, 0.2);
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+        }
+        button, input[type="file"], select {
+            background: #00ff88;
+            color: #000;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 25px;
+            font-size: 1.1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            margin: 10px;
+        }
+        button:hover, input[type="file"]::-webkit-file-upload-button:hover, select:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 15px rgba(0, 255, 136, 0.5);
+        }
+        input[type="range"] {
+            width: 150px;
+            accent-color: #00ff88;
+        }
+        input[type="range"]:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        label {
+            font-size: 1.1em;
+            color: #ffffff;
+            margin: 10px;
+        }
+        #waveform {
+            width: 600px;
+            height: 120px;
+            background: #000;
+            border: 2px solid #00ff88;
+            border-radius: 10px;
+            margin-top: 20px;
+            box-shadow: 0 0 10px rgba(0, 255, 136, 0.3);
+        }
+        #status {
+            font-size: 1em;
+            color: #ff4d4d;
+            font-weight: 600;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>WelcomeNigel's Prototype</h1>
+    <div id="controls">
+        <input type="file" id="audioInput" accept="audio/*">
+        <button onclick="playAudio()">Play</button>
+        <button onclick="pauseAudio()">Pause</button>
+        <label>Reverb Mix: <input type="range" id="reverbLevel" min="0" max="1" step="0.1" value="0" disabled></label>
+        <label>Delay Mix: <input type="range" id="delayMix" min="0" max="1" step="0.1" value="0" disabled></label>
+        <label>Delay Time: <input type="range" id="delayTime" min="0.1" max="1" step="0.1" value="0.3" disabled></label>
+        <label>Dry Mix: <input type="range" id="dryMix" min="0" max="1" step="0.1" value="1" disabled></label>
+        <label>Spiral Depth: <input type="range" id="spiralDepth" min="0" max="1" step="0.1" value="0" disabled></label>
+        <label>Flanger Mix: <input type="range" id="flangerMix" min="0" max="1" step="0.1" value="0" disabled></label>
+        <label>Flanger Speed: <input type="range" id="flangerSpeed" min="0.1" max="2" step="0.1" value="0.25" disabled></label>
+        <label>Filter Type: 
+            <select id="filterType" disabled>
+                <option value="lowpass">Low-Pass</option>
+                <option value="highpass">High-Pass</option>
+            </select>
+        </label>
+        <label>Filter Cutoff: <input type="range" id="filterCutoff" min="20" max="20000" step="10" value="20000" disabled></label>
+        <label>Filter Q: <input type="range" id="filterQ" min="0.1" max="10" step="0.1" value="1" disabled></label>
+    </div>
+    <div id="status"></div>
+    <canvas id="waveform"></canvas>
+
+    <script>
+        let audioContext;
+        let audioElement;
+        let source;
+        let reverbNode;
+        let delayNode;
+        let spiralNodes = [];
+        let flangerNode;
+        let filterNode;
+        let reverbGain;
+        let delayGain;
+        let dryGain;
+        let spiralGain;
+        let flangerGain;
+        let filterGain;
+        let flangerLFO; // Declare globally
+        let spiralLFO; // Declare globally
+        let analyser;
+        let canvas;
+        let canvasCtx;
+
+        // Enable effect controls
+        function enableControls() {
+            document.getElementById('reverbLevel').disabled = false;
+            document.getElementById('delayMix').disabled = false;
+            document.getElementById('delayTime').disabled = false;
+            document.getElementById('dryMix').disabled = false;
+            document.getElementById('spiralDepth').disabled = false;
+            document.getElementById('flangerMix').disabled = false;
+            document.getElementById('flangerSpeed').disabled = false;
+            document.getElementById('filterType').disabled = false;
+            document.getElementById('filterCutoff').disabled = false;
+            document.getElementById('filterQ').disabled = false;
+        }
+
+        // Initialize Web Audio API and visualizer
+        function initAudio() {
+            try {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                audioElement = new Audio();
+                audioElement.crossOrigin = "anonymous";
+                console.log("AudioContext initialized:", audioContext.state);
+                
+                // Visualizer setup
+                canvas = document.getElementById('waveform');
+                canvasCtx = canvas.getContext('2d');
+                analyser = audioContext.createAnalyser();
+                analyser.fftSize = 2048;
+
+                // Create source only when file is selected
+                document.getElementById('audioInput').addEventListener('change', () => {
+                    source = audioContext.createMediaElementSource(audioElement);
+                    
+                    // Create dry gain
+                    dryGain = audioContext.createGain();
+                    dryGain.gain.setValueAtTime(1, audioContext.currentTime);
+                    
+                    // Create reverb
+                    reverbNode = audioContext.createConvolver();
+                    reverbNode.buffer = createImpulseResponse(3, 3);
+                    reverbGain = audioContext.createGain();
+                    reverbGain.gain.setValueAtTime(0, audioContext.currentTime);
+                    
+                    // Create delay with feedback
+                    delayNode = audioContext.createDelay(5.0);
+                    delayGain = audioContext.createGain();
+                    delayGain.gain.setValueAtTime(0, audioContext.currentTime);
+                    const delayFeedback = audioContext.createGain();
+                    delayFeedback.gain.setValueAtTime(0.4, audioContext.currentTime);
+                    delayNode.delayTime.setValueAtTime(0.3, audioContext.currentTime);
+                    
+                    // Create spiral (phaser-like) effect with all-pass filters
+                    spiralGain = audioContext.createGain();
+                    spiralGain.gain.setValueAtTime(0, audioContext.currentTime);
+                    spiralLFO = audioContext.createOscillator();
+                    spiralLFO.type = 'sine';
+                    spiralLFO.frequency.setValueAtTime(0.5, audioContext.currentTime);
+                    const spiralModGain = audioContext.createGain();
+                    spiralModGain.gain.setValueAtTime(100, audioContext.currentTime);
+                    spiralNodes = [];
+                    for (let i = 0; i < 4; i++) {
+                        const allPass = audioContext.createBiquadFilter();
+                        allPass.type = 'allpass';
+                        allPass.frequency.setValueAtTime(500 + i * 200, audioContext.currentTime);
+                        allPass.Q.setValueAtTime(1, audioContext.currentTime);
+                        spiralNodes.push(allPass);
+                    }
+                    spiralLFO.connect(spiralModGain);
+                    spiralNodes.forEach(node => spiralModGain.connect(node.frequency));
+                    spiralLFO.start();
+                    
+                    // Create flanger
+                    flangerNode = audioContext.createDelay(0.005);
+                    flangerGain = audioContext.createGain();
+                    flangerGain.gain.setValueAtTime(0, audioContext.currentTime);
+                    const flangerFeedback = audioContext.createGain();
+                    flangerFeedback.gain.setValueAtTime(0.5, audioContext.currentTime);
+                    flangerLFO = audioContext.createOscillator();
+                    flangerLFO.type = 'sine';
+                    flangerLFO.frequency.setValueAtTime(0.25, audioContext.currentTime);
+                    const flangerModGain = audioContext.createGain();
+                    flangerModGain.gain.setValueAtTime(0.002, audioContext.currentTime);
+                    flangerLFO.connect(flangerModGain);
+                    flangerModGain.connect(flangerNode.delayTime);
+                    flangerLFO.start();
+                    
+                    // Create filter
+                    filterNode = audioContext.createBiquadFilter();
+                    filterNode.type = 'lowpass';
+                    filterNode.frequency.setValueAtTime(20000, audioContext.currentTime);
+                    filterNode.Q.setValueAtTime(1, audioContext.currentTime);
+                    filterGain = audioContext.createGain();
+                    filterGain.gain.setValueAtTime(1, audioContext.currentTime);
+                    
+                    // Connect nodes
+                    source.connect(dryGain);
+                    dryGain.connect(analyser);
+                    analyser.connect(audioContext.destination);
+                    source.connect(reverbNode);
+                    reverbNode.connect(reverbGain);
+                    reverbGain.connect(analyser);
+                    source.connect(delayNode);
+                    delayNode.connect(delayGain);
+                    delayGain.connect(analyser);
+                    delayGain.connect(delayNode);
+                    source.connect(spiralNodes[0]);
+                    for (let i = 0; i < spiralNodes.length - 1; i++) {
+                        spiralNodes[i].connect(spiralNodes[i + 1]);
+                    }
+                    spiralNodes[spiralNodes.length - 1].connect(spiralGain);
+                    spiralGain.connect(analyser);
+                    source.connect(flangerNode);
+                    flangerNode.connect(flangerGain);
+                    flangerGain.connect(analyser);
+                    flangerGain.connect(flangerNode);
+                    source.connect(filterNode);
+                    filterNode.connect(filterGain);
+                    filterGain.connect(analyser);
+                    
+                    enableControls(); // Enable sliders after file selection
+                });
+
+                // Update effects
+                document.getElementById('reverbLevel').addEventListener('input', (e) => {
+                    if (reverbGain) {
+                        reverbGain.gain.setValueAtTime(e.target.value, audioContext.currentTime);
+                        document.getElementById('status').textContent = `Reverb Mix: ${e.target.value}`;
+                    }
+                });
+                document.getElementById('delayMix').addEventListener('input', (e) => {
+                    if (delayGain) {
+                        delayGain.gain.setValueAtTime(e.target.value, audioContext.currentTime);
+                        document.getElementById('status').textContent = `Delay Mix: ${e.target.value}`;
+                    }
+                });
+                document.getElementById('delayTime').addEventListener('input', (e) => {
+                    if (delayNode) {
+                        delayNode.delayTime.setValueAtTime(e.target.value, audioContext.currentTime);
+                        document.getElementById('status').textContent = `Delay Time: ${e.target.value}s`;
+                    }
+                });
+                document.getElementById('dryMix').addEventListener('input', (e) => {
+                    if (dryGain) {
+                        dryGain.gain.setValueAtTime(e.target.value, audioContext.currentTime);
+                        document.getElementById('status').textContent = `Dry Mix: ${e.target.value}`;
+                    }
+                });
+                document.getElementById('spiralDepth').addEventListener('input', (e) => {
+                    if (spiralGain && spiralLFO) {
+                        spiralGain.gain.setValueAtTime(e.target.value, audioContext.currentTime);
+                        document.getElementById('status').textContent = `Spiral Depth: ${e.target.value}`;
+                    } else {
+                        document.getElementById('status').textContent = `Select an audio file first`;
+                    }
+                });
+                document.getElementById('flangerMix').addEventListener('input', (e) => {
+                    if (flangerGain && flangerLFO) {
+                        flangerGain.gain.setValueAtTime(e.target.value, audioContext.currentTime);
+                        document.getElementById('status').textContent = `Flanger Mix: ${e.target.value}`;
+                    } else {
+                        document.getElementById('status').textContent = `Select an audio file first`;
+                    }
+                });
+                document.getElementById('flangerSpeed').addEventListener('input', (e) => {
+                    if (flangerLFO) {
+                        flangerLFO.frequency.setValueAtTime(e.target.value, audioContext.currentTime);
+                        document.getElementById('status').textContent = `Flanger Speed: ${e.target.value}Hz`;
+                    } else {
+                        document.getElementById('status').textContent = `Select an audio file first`;
+                    }
+                });
+                document.getElementById('filterType').addEventListener('change', (e) => {
+                    if (filterNode) {
+                        filterNode.type = e.target.value;
+                        document.getElementById('status').textContent = `Filter Type: ${e.target.value}`;
+                    }
+                });
+                document.getElementById('filterCutoff').addEventListener('input', (e) => {
+                    if (filterNode) {
+                        filterNode.frequency.setValueAtTime(e.target.value, audioContext.currentTime);
+                        document.getElementById('status').textContent = `Filter Cutoff: ${e.target.value}Hz`;
+                    }
+                });
+                document.getElementById('filterQ').addEventListener('input', (e) => {
+                    if (filterNode) {
+                        filterNode.Q.setValueAtTime(e.target.value, audioContext.currentTime);
+                        document.getElementById('status').textContent = `Filter Q: ${e.target.value}`;
+                    }
+                });
+
+                // Draw waveform
+                function drawWaveform() {
+                    requestAnimationFrame(drawWaveform);
+                    const bufferLength = analyser.frequencyBinCount;
+                    const dataArray = new Uint8Array(bufferLength);
+                    analyser.getByteTimeDomainData(dataArray);
+
+                    canvasCtx.fillStyle = '#000';
+                    canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
+                    canvasCtx.lineWidth = 2;
+                    canvasCtx.strokeStyle = '#00ff88';
+                    canvasCtx.beginPath();
+
+                    const sliceWidth = canvas.width / bufferLength;
+                    let x = 0;
+                    for (let i = 0; i < bufferLength; i++) {
+                        const v = dataArray[i] / 128.0;
+                        const y = (v * canvas.height) / 2;
+                        if (i === 0) {
+                            canvasCtx.moveTo(x, y);
+                        } else {
+                            canvasCtx.lineTo(x, y);
+                        }
+                        x += sliceWidth;
+                    }
+                    canvasCtx.lineTo(canvas.width, canvas.height / 2);
+                    canvasCtx.stroke();
+                }
+                drawWaveform();
+            } catch (error) {
+                document.getElementById('status').textContent = "Error initializing audio: " + error.message;
+            }
+        }
+
+        // Generate impulse response for reverb
+        function createImpulseResponse(duration, decay) {
+            const sampleRate = audioContext.sampleRate;
+            const length = sampleRate * duration;
+            const impulse = audioContext.createBuffer(2, length, sampleRate);
+            for (let channel = 0; channel < 2; channel++) {
+                const impulseData = impulse.getChannelData(channel);
+                for (let i = 0; i < length; i++) {
+                    impulseData[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / length, decay);
+                }
+            }
+            return impulse;
+        }
+
+        // Play audio
+        async function playAudio() {
+            try {
+                const fileInput = document.getElementById('audioInput').files[0];
+                if (!fileInput) {
+                    document.getElementById('status').textContent = "Please select an audio file.";
+                    return;
+                }
+                console.log("Selected file:", fileInput.name);
+                audioElement.src = URL.createObjectURL(fileInput);
+                
+                if (audioContext.state === 'suspended') {
+                    await audioContext.resume();
+                    console.log("AudioContext resumed:", audioContext.state);
+                }
+                
+                await audioElement.play();
+                document.getElementById('status').textContent = "Playing: " + fileInput.name;
+            } catch (error) {
+                document.getElementById('status').textContent = "Error playing audio: " + error.message;
+                console.error("Playback error:", error);
+            }
+        }
+
+        // Pause audio
+        function pauseAudio() {
+            try {
+                audioElement.pause();
+                document.getElementById('status').textContent = "Paused";
+            } catch (error) {
+                document.getElementById('status').textContent = "Error pausing audio: " + error.message;
+            }
+        }
+
+        // Initialize on load
+        window.onload = initAudio;
+    </script>
+</body>
+</html>
